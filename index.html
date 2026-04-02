@@ -412,11 +412,21 @@ function renderDone(){
 // ============================================================
 var audioCtx=null, masterGain=null, audioProvider=null;
 function initAudio(){
-  if(audioCtx) return;
-  try{ audioCtx=new(window.AudioContext||window.webkitAudioContext)(); masterGain=audioCtx.createGain(); masterGain.gain.value=0.65; masterGain.connect(audioCtx.destination); } catch(e){ console.warn('Audio:',e); }
+  if(audioCtx){
+    if(audioCtx.state==='suspended') audioCtx.resume();
+    return;
+  }
+  try{
+    audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    masterGain=audioCtx.createGain(); masterGain.gain.value=0.65; masterGain.connect(audioCtx.destination);
+    if(audioCtx.state==='suspended') audioCtx.resume();
+  } catch(e){ console.warn('Audio:',e); }
 }
+var fallbackSpawnTimer=null;
 function startLevel(perfIdx){
   notes=[]; caught=0; totalNotes=0; combo=1; currentSection='intro';
+  // Clear any existing fallback timer
+  if(fallbackSpawnTimer){ clearInterval(fallbackSpawnTimer); fallbackSpawnTimer=null; }
   if(!audioCtx) return;
   if(audioProvider) audioProvider.stop();
   audioProvider=Object.create(ProceduralAudioProvider);
@@ -426,6 +436,22 @@ function startLevel(perfIdx){
   });
   audioProvider.onEnd(function(){ if(state.current==='playing') setTimeout(function(){ if(state.current==='playing') endLevel(); },1400); });
   audioProvider.play();
+  // Fallback: if beat clock doesn't fire within 2s (iOS audio issue), spawn notes on a timer
+  var beatFired=false;
+  audioProvider.onBeat(function(){ beatFired=true; });
+  setTimeout(function(){
+    if(!beatFired && state.current==='playing'){
+      console.log('[fallback] beat clock silent, using timer spawner');
+      var beatNum=0;
+      var prof=AUDIO_PROFILES[perfIdx];
+      var beatInterval=(60/prof.bpm)*1000;
+      fallbackSpawnTimer=setInterval(function(){
+        if(state.current!=='playing'){ clearInterval(fallbackSpawnTimer); fallbackSpawnTimer=null; return; }
+        onBeatSpawn(beatNum++);
+        if(beatNum>=prof.totalBars*4){ clearInterval(fallbackSpawnTimer); fallbackSpawnTimer=null; endLevel(); }
+      }, beatInterval);
+    }
+  }, 2000);
 }
 function playCatchSound(t){ if(!audioCtx) return; var f={quarter:330,eighth:440,sixteenth:523,accidental:370}; var o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.connect(g); g.connect(masterGain); o.type='sine'; o.frequency.value=f[t]||440; var now=audioCtx.currentTime; g.gain.setValueAtTime(0.26,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.12); o.start(now); o.stop(now+0.15); }
 function playMissSound(){ if(!audioCtx) return; var dur=0.08,buf=audioCtx.createBuffer(1,Math.floor(audioCtx.sampleRate*dur),audioCtx.sampleRate); var d=buf.getChannelData(0); for(var i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length); var s=audioCtx.createBufferSource(),g=audioCtx.createGain(),fl=audioCtx.createBiquadFilter(); s.buffer=buf; fl.type='bandpass'; fl.frequency.value=180; s.connect(fl); fl.connect(g); g.connect(masterGain); g.gain.value=0.18; s.start(); }
